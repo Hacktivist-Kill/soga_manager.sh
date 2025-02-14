@@ -1,4 +1,18 @@
 #!/bin/bash
+set -euo pipefail
+
+##############################################################################
+# 捕捉信号，确保中断时正常退出
+##############################################################################
+trap 'echo -e "\n${YELLOW}程序中断，正在退出...${NC}"; exit 1' SIGINT SIGTERM
+
+##############################################################################
+# 检查是否以 root 用户运行
+##############################################################################
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}请以 root 用户运行该脚本${NC}"
+    exit 1
+fi
 
 ##############################################################################
 #                             彩色输出配置
@@ -9,7 +23,7 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 MAGENTA='\033[0;35m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'  # No Color
 
 ##############################################################################
 #                           全局配置
@@ -42,14 +56,67 @@ print_banner() {
 }
 
 log() {
-    # 日志输出，同时打印到屏幕和文件
+    # 同时将日志输出到屏幕和日志文件
     echo -e "[${BLUE}$(date '+%Y-%m-%d %H:%M:%S')${NC}] $1" | tee -a "$LOG_FILE"
 }
 
 pause() {
-    # 用于在执行完某些功能后暂停，等待用户回车
     echo -e "${YELLOW}按回车键继续...${NC}"
     read -r
+}
+
+##############################################################################
+# 自动检测必需文件，若缺失则自动安装/更新
+##############################################################################
+auto_install_if_missing() {
+    local missing=0
+
+    if [ ! -f "$RECOVERY_SCRIPT" ]; then
+        log "恢复脚本不存在，准备自动安装更新..."
+        missing=1
+    fi
+    if [ ! -f "$CHECK_SCRIPT" ]; then
+        log "检查脚本不存在，准备自动安装更新..."
+        missing=1
+    fi
+    if [ ! -f "$RECOVERY_SERVICE" ]; then
+        log "systemd 单元文件 soga-recovery.service 不存在，准备自动安装更新..."
+        missing=1
+    fi
+    if [ ! -f "$REBOOT_SERVICE" ]; then
+        log "systemd 单元文件 soga-autoreboot.service 不存在，准备自动安装更新..."
+        missing=1
+    fi
+    if [ ! -f "$REBOOT_TIMER" ]; then
+        log "systemd 单元文件 soga-autoreboot.timer 不存在，准备自动安装更新..."
+        missing=1
+    fi
+
+    if [ "$missing" -eq 1 ]; then
+        log "缺失部分文件，自动执行安装/更新流程..."
+        create_recovery_script
+        create_check_script
+        create_systemd_services
+        setup_auto_reboot
+        log "安装/更新完成"
+    else
+        log "所有必需文件已存在。"
+    fi
+}
+
+##############################################################################
+# 显示必需文件状态（美化显示）
+##############################################################################
+display_required_files_status() {
+    echo -e "${MAGENTA}================= 必需文件状态 =================${NC}"
+    for file in "$RECOVERY_SCRIPT" "$CHECK_SCRIPT" "$RECOVERY_SERVICE" "$REBOOT_SERVICE" "$REBOOT_TIMER"; do
+        if [ -f "$file" ]; then
+            echo -e "${GREEN}存在:${NC} $file"
+        else
+            echo -e "${RED}缺失:${NC} $file"
+        fi
+    done
+    echo -e "${MAGENTA}==================================================${NC}"
 }
 
 ##############################################################################
@@ -58,6 +125,7 @@ pause() {
 create_recovery_script() {
     cat > "$RECOVERY_SCRIPT" << 'EOF'
 #!/bin/bash
+set -euo pipefail
 
 SOGA_DIR="/usr/local/soga"
 BACKUP_DIR="/root/soga_backup"
@@ -71,18 +139,13 @@ get_running_services() {
     log "获取正在运行的服务信息..."
     mkdir -p "$BACKUP_DIR"
     > "$BACKUP_DIR/service_info.txt"
-
     local services
     services=$(systemctl list-units --type=service --all | grep "soga_" | awk '{print $1}')
     for service in $services; do
         local service_name=${service%.service}
-        local service_type
-        service_type=$(echo "$service_name" | cut -d'_' -f2)
-        local service_mode
-        service_mode=$(echo "$service_name" | cut -d'_' -f3)
-        local service_id
-        service_id=$(echo "$service_name" | cut -d'_' -f4)
-
+        local service_type=$(echo "$service_name" | cut -d'_' -f2)
+        local service_mode=$(echo "$service_name" | cut -d'_' -f3)
+        local service_id=$(echo "$service_name" | cut -d'_' -f4)
         echo "${service_type}|${service_mode}|${service_id}" >> "$BACKUP_DIR/service_info.txt"
         log "发现服务: ${service_type} - ${service_mode} - ${service_id}"
     done
@@ -90,15 +153,9 @@ get_running_services() {
 
 backup_files() {
     log "开始备份文件..."
-    
-    # 1. 删除旧备份目录（如果需要完全清空备份）
     rm -rf "$BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
-    
-    # 2. 重新获取当前正在运行的服务信息
     get_running_services
-    
-    # 3. 复制最新文件到备份目录
     for file in "$SOGA_DIR"/soga_*; do
         if [ -f "$file" ]; then
             cp -p "$file" "$BACKUP_DIR/"
@@ -110,35 +167,28 @@ backup_files() {
 restore_files() {
     log "开始恢复文件..."
     mkdir -p "$SOGA_DIR"
-
     if [ ! -f "$BACKUP_DIR/service_info.txt" ]; then
         log "错误: 找不到服务信息文件"
         return 1
     fi
-
     declare -A service_types
     while IFS='|' read -r type mode id; do
         service_types["$type"]=1
     done < "$BACKUP_DIR/service_info.txt"
-
     for type in "${!service_types[@]}"; do
         log "处理服务类型: $type"
-        local configs
-        configs=$(grep "^$type|" "$BACKUP_DIR/service_info.txt")
+        local configs=$(grep "^$type|" "$BACKUP_DIR/service_info.txt")
         while IFS='|' read -r t mode id; do
             local backup_file="$BACKUP_DIR/soga_${type}_${mode}_${id}"
             local target_file="$SOGA_DIR/soga_${type}_${mode}_${id}"
-
             if [ -f "$backup_file" ]; then
-                # 原子替换：先复制到 .tmp，再 mv 到正式文件
                 cp -p "$backup_file" "${target_file}.tmp"
                 mv -f "${target_file}.tmp" "$target_file"
                 chmod 755 "$target_file"
                 chown root:root "$target_file"
                 log "已恢复: $target_file"
             else
-                local source_file
-                source_file=$(ls "$BACKUP_DIR"/soga_${type}_* 2>/dev/null | head -n 1)
+                local source_file=$(ls "$BACKUP_DIR"/soga_${type}_* 2>/dev/null | head -n 1)
                 if [ -n "$source_file" ]; then
                     cp -p "$source_file" "${target_file}.tmp"
                     mv -f "${target_file}.tmp" "$target_file"
@@ -151,11 +201,8 @@ restore_files() {
             fi
         done <<< "$configs"
     done
-
     log "文件已恢复，正在验证..."
     ls -l "$SOGA_DIR"/soga_* 2>/dev/null || true
-
-    # 恢复完成后，统一重启所有 soga_*.service，避免使用旧文件
     log "重启所有 soga_*.service ..."
     systemctl daemon-reload
     for svc in $(systemctl list-units --type=service --all | grep "soga_" | awk '{print $1}'); do
@@ -201,6 +248,7 @@ EOF
 create_check_script() {
     cat > "$CHECK_SCRIPT" << 'EOF'
 #!/bin/bash
+set -euo pipefail
 
 LOG_FILE="/var/log/soga_check.log"
 SOGA_DIR="/usr/local/soga"
@@ -211,7 +259,6 @@ log() {
 
 check_services() {
     local failed=0
-    local service
     for service in $(systemctl list-units --type=service --all | grep "soga_" | awk '{print $1}'); do
         if ! systemctl is-active "$service" &>/dev/null; then
             log "服务异常: $service"
@@ -225,7 +272,6 @@ check_services() {
 
 check_files() {
     local missing=0
-    local file
     for file in "$SOGA_DIR"/soga_*; do
         [ -e "$file" ] || continue
         if [ ! -f "$file" ] || [ ! -x "$file" ]; then
@@ -233,12 +279,10 @@ check_files() {
             missing=1
         fi
     done
-
     if [ $missing -eq 1 ]; then
         log "检测到文件异常，执行恢复..."
         /usr/local/bin/soga_recovery.sh restore
     fi
-
     return $missing
 }
 
@@ -247,7 +291,6 @@ main() {
     local status=0
     check_files || status=1
     check_services || status=1
-
     if [ $status -eq 0 ]; then
         log "检查完成，一切正常"
     else
@@ -264,11 +307,11 @@ EOF
 }
 
 ##############################################################################
-# 3. 创建 systemd 单元
+# 3. 创建 systemd 单元文件
 ##############################################################################
 create_systemd_services() {
     # soga-recovery.service
-    cat > "/etc/systemd/system/soga-recovery.service" << EOF
+    cat > "$RECOVERY_SERVICE" << EOF
 [Unit]
 Description=SOGA Recovery Service
 Before=soga_*.service
@@ -284,7 +327,7 @@ WantedBy=multi-user.target
 EOF
 
     # soga-autoreboot.service
-    cat > "/etc/systemd/system/soga-autoreboot.service" << EOF
+    cat > "$REBOOT_SERVICE" << EOF
 [Unit]
 Description=SOGA Auto-reboot Service
 Before=reboot.target
@@ -296,7 +339,7 @@ ExecStart=/sbin/reboot
 EOF
 
     # soga-autoreboot.timer
-    cat > "/etc/systemd/system/soga-autoreboot.timer" << EOF
+    cat > "$REBOOT_TIMER" << EOF
 [Unit]
 Description=SOGA Daily Auto-reboot Timer
 
@@ -309,7 +352,7 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    log "systemd服务已创建/更新"
+    log "systemd 单元文件已创建/更新"
 }
 
 ##############################################################################
@@ -318,14 +361,9 @@ EOF
 setup_auto_reboot() {
     log "配置自动重启..."
     systemctl daemon-reload
-
-    # 开机先恢复文件
     systemctl enable soga-recovery.service
-
-    # 定时重启
     systemctl enable soga-autoreboot.timer
     systemctl start soga-autoreboot.timer
-
     log "自动重启已配置为每天 ${REBOOT_TIME}"
 }
 
@@ -336,106 +374,161 @@ reboot_now() {
     log "准备立即重启系统..."
     log "执行最后备份..."
     "${RECOVERY_SCRIPT}" backup
-
     log "系统将在 10 秒后重启..."
     sleep 10
     reboot
 }
 
 ##############################################################################
-# 6. 主菜单
+# 6. 卸载 SOGA 管理服务
 ##############################################################################
-show_menu() {
-    echo -e "${MAGENTA}=================================================${NC}"
-    echo -e "${CYAN}           SOGA 服务管理工具 (美化版)${NC}"
-    echo -e "${MAGENTA}=================================================${NC}"
-
-    # **检测 SOGA 是否安装**
-    if systemctl list-units --type=service --all | grep -q "soga_"; then
-        echo -e "${GREEN}✅ 已检测到 SOGA 运行中${NC}"
-        installed=true
-    else
-        echo -e "${YELLOW}⚠️  未检测到 SOGA 运行，将自动执行 1${NC}"
-        installed=false
+uninstall_soga_manager() {
+    read -p "确定要卸载 SOGA 管理服务吗？这将移除所有管理文件。请输入 yes 确认: " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        log "取消卸载操作。"
+        pause
+        return
     fi
 
-    echo -e "${GREEN}1.${NC} 安装/更新恢复服务 (含原子替换, 防止文本忙)"
-    echo -e "${GREEN}2.${NC} 配置/修改自动重启时间"
-    echo -e "${GREEN}3.${NC} 立即备份"
-    echo -e "${GREEN}4.${NC} 立即恢复"
-    echo -e "${GREEN}5.${NC} 查看详细状态 (包含各 soga 服务的状态)"
-    echo -e "${GREEN}6.${NC} 立即重启"
-    echo -e "${GREEN}0.${NC} 退出"
-    echo -e "${MAGENTA}=================================================${NC}"
+    log "正在卸载 SOGA 管理服务..."
+    systemctl stop soga-recovery.service 2>/dev/null || true
+    systemctl disable soga-recovery.service 2>/dev/null || true
+    systemctl stop soga-autoreboot.timer 2>/dev/null || true
+    systemctl disable soga-autoreboot.timer 2>/dev/null || true
+    systemctl stop soga-autoreboot.service 2>/dev/null || true
+    systemctl disable soga-autoreboot.service 2>/dev/null || true
 
-    # **如果是交互模式，等待用户输入**
-    if [[ -t 0 ]]; then
-        read -p "请选择操作 [0-6]: " choice
-    else
-        if [ "$installed" = false ]; then
-            echo -e "${YELLOW}⚠️  SOGA 未安装，自动执行 1 (安装/更新恢复服务)${NC}"
-            choice=1
+    for file in "$RECOVERY_SCRIPT" "$CHECK_SCRIPT" "$RECOVERY_SERVICE" "$REBOOT_SERVICE" "$REBOOT_TIMER"; do
+        if [ -f "$file" ]; then
+            log "正在删除文件: $file"
+            rm -f "$file"
         else
-            echo -e "${GREEN}✅ SOGA 已安装，不执行任何操作${NC}"
-            exit 0
+            log "文件不存在: $file"
         fi
-    fi
+    done
+
+    systemctl daemon-reload
+    log "SOGA 管理服务已卸载。"
+    pause
 }
 
 ##############################################################################
-# 7. 主要逻辑
+# 7. 主菜单（支持循环操作）
 ##############################################################################
-main() {
-    clear
-    show_menu
-    case "$choice" in
-        1)
-            log "开始安装/更新恢复服务..."
-            create_recovery_script
-            create_check_script
-            create_systemd_services
-            setup_auto_reboot
-            log "安装/更新完成"
-            ;;
-        2)
-            read -p "请输入每日自动重启时间 (格式 HH:MM，默认 ${REBOOT_TIME}): " new_time
-            if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
-                REBOOT_TIME="$new_time"
+show_menu() {
+    while true; do
+        clear
+        print_banner
+        echo -e "${MAGENTA}=================================================${NC}"
+        echo -e "${CYAN}           SOGA 服务管理工具 (Beautified)${NC}"
+        echo -e "${MAGENTA}=================================================${NC}"
+
+        # 修改检测逻辑：如果所有必需文件存在，则视为已安装
+        if [ -f "$RECOVERY_SCRIPT" ] && [ -f "$CHECK_SCRIPT" ] && [ -f "$RECOVERY_SERVICE" ] && [ -f "$REBOOT_SERVICE" ] && [ -f "$REBOOT_TIMER" ]; then
+            echo -e "${GREEN}✅ 已检测到 SOGA 已安装${NC}"
+        else
+            echo -e "${YELLOW}⚠️  未检测到 SOGA 已安装，自动执行安装/更新操作...${NC}"
+            auto_install_if_missing
+            display_required_files_status
+        fi
+
+        echo -e "${GREEN}1.${NC} 安装/更新恢复服务 (含原子替换)"
+        echo -e "${GREEN}2.${NC} 配置/修改自动重启时间"
+        echo -e "${GREEN}3.${NC} 立即备份"
+        echo -e "${GREEN}4.${NC} 立即恢复"
+        echo -e "${GREEN}5.${NC} 查看详细状态 (包含各 SOGA 服务状态)"
+        echo -e "${GREEN}6.${NC} 立即重启"
+        echo -e "${GREEN}7.${NC} 卸载 SOGA 管理服务"
+        echo -e "${GREEN}0.${NC} 退出"
+        echo -e "${MAGENTA}=================================================${NC}"
+
+        if [[ -t 0 ]]; then
+            read -p "请选择操作 [0-7] (默认为0): " choice
+            choice=${choice:-0}
+        else
+            exit 0
+        fi
+
+        case "$choice" in
+            1)
+                log "开始安装/更新恢复服务..."
+                create_recovery_script
+                create_check_script
                 create_systemd_services
                 setup_auto_reboot
-                log "自动重启时间已修改为 $REBOOT_TIME"
-            else
-                log "错误: 时间格式不正确"
-            fi
-            ;;
-        3)
-            log "开始备份数据..."
-            "$RECOVERY_SCRIPT" backup
-            log "备份完成"
-            ;;
-        4)
-            log "开始恢复数据..."
-            "$RECOVERY_SCRIPT" restore
-            log "恢复完成"
-            ;;
-        5)
-            log "查看详细服务状态..."
-            "$RECOVERY_SCRIPT" status
-            systemctl status soga-autoreboot.timer --no-pager
-            ;;
-        6)
-            log "立即重启系统..."
-            reboot_now
-            ;;
-        0)
-            log "退出程序"
-            exit 0
-            ;;
-        *)
-            log "无效选择"
-            ;;
-    esac
-    exit 0
+                log "安装/更新完成"
+                pause
+                ;;
+            2)
+                read -p "请输入每日自动重启时间 (格式 HH:MM，默认为 ${REBOOT_TIME}): " new_time
+                if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+                    REBOOT_TIME="$new_time"
+                    create_systemd_services
+                    setup_auto_reboot
+                    log "自动重启时间已修改为 $REBOOT_TIME"
+                else
+                    log "错误: 时间格式不正确"
+                fi
+                pause
+                ;;
+            3)
+                log "开始备份数据..."
+                "$RECOVERY_SCRIPT" backup
+                log "备份完成"
+                pause
+                ;;
+            4)
+                log "开始恢复数据..."
+                "$RECOVERY_SCRIPT" restore
+                log "恢复完成"
+                pause
+                ;;
+5)
+    log "查看详细服务状态..."
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] 当前服务状态:${NC}"
+    # 列出所有包含 soga_ 的服务，并对状态进行颜色标记
+    systemctl list-units --type=service --all | grep "soga_" | while read -r line; do
+        # 如果该行包含 " active " 则标记为绿色；如果包含 " failed " 则标记为红色
+        if echo "$line" | grep -q " active "; then
+            echo -e "  $(echo "$line" | sed "s/ active / ${GREEN}active${NC} /g")"
+        elif echo "$line" | grep -q " failed "; then
+            echo -e "  $(echo "$line" | sed "s/ failed / ${RED}failed${NC} /g")"
+        else
+            echo "  $line"
+        fi
+    done
+
+    echo ""
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] 当前 SOGA 文件列表:${NC}"
+    ls -l "${SOGA_DIR}/soga_"* 2>/dev/null
+    pause
+    ;;
+
+            6)
+                log "立即重启系统..."
+                reboot_now
+                ;;
+            7)
+                uninstall_soga_manager
+                ;;
+            0)
+                log "退出程序"
+                exit 0
+                ;;
+            *)
+                log "无效选择，请重新输入"
+                pause
+                ;;
+        esac
+    done
+}
+
+##############################################################################
+# 8. 主要逻辑
+##############################################################################
+main() {
+    auto_install_if_missing
+    show_menu
 }
 
 main
