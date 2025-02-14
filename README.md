@@ -1,1 +1,0 @@
-# soga_manager.sh
