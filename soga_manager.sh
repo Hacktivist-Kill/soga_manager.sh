@@ -420,7 +420,9 @@ uninstall_soga_manager() {
 
     systemctl daemon-reload
     log "SOGA 管理服务及备份已卸载。"
-    exit 0
+    
+    # 模拟 Ctrl+C 退出（发送 SIGINT 信号）
+    kill -SIGINT $$
 }
 
 ##############################################################################
