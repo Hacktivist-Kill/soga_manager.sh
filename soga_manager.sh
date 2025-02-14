@@ -355,11 +355,12 @@ show_menu() {
     echo -e "${GREEN}0.${NC} 退出"
     echo -e "${MAGENTA}=================================================${NC}"
 
-    # **如果是交互式终端，等待用户输入**
-    if [[ -t 0 ]]; then
+    # **判断是否是交互式终端**
+    if [ -t 0 ]; then
         read -p "请选择操作 [0-6]: " choice
     else
-        choice=1  # **如果是非交互模式（如 `bash soga_manager.sh`），默认选 1**
+        echo -e "${YELLOW}检测到非交互模式，自动执行 1 (安装/更新恢复服务)${NC}"
+        choice=1
     fi
 }
 
