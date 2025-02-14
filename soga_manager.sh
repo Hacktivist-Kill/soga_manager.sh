@@ -354,16 +354,15 @@ show_menu() {
     echo -e "${GREEN}6.${NC} 立即重启"
     echo -e "${GREEN}0.${NC} 退出"
     echo -e "${MAGENTA}=================================================${NC}"
-    read -p "请选择操作 [0-6]: " choice
+
+    # **如果是交互式终端，等待用户输入**
+    if [[ -t 0 ]]; then
+        read -p "请选择操作 [0-6]: " choice
+    else
+        choice=1  # **如果是非交互模式（如 `bash soga_manager.sh`），默认选 1**
+    fi
 }
 
-main() {
-    clear
-    print_banner
-
-    while true; do
-        show_menu
-        case "$choice" in
             1)
                 log "开始安装/更新恢复服务..."
                 create_recovery_script
