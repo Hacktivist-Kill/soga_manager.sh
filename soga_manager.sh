@@ -383,7 +383,7 @@ reboot_now() {
 # 6. 卸载 SOGA 管理服务
 ##############################################################################
 uninstall_soga_manager() {
-    read -p "确定要卸载 SOGA 管理服务吗？这将移除所有管理文件及备份数据。请输入 yes 确认: " confirm
+    read -p "确定要卸载 SOGA 管理服务吗？这将移除所有管理文件、备份数据及配置文件。请输入 yes 确认: " confirm
     if [[ "$confirm" != "yes" ]]; then
         log "取消卸载操作。"
         pause
@@ -418,10 +418,18 @@ uninstall_soga_manager() {
         log "备份目录不存在: $BACKUP_DIR"
     fi
 
+    # 删除 SOGA 配置目录（例如 /etc/soga，下同）
+    if [ -d "/etc/soga" ]; then
+        log "正在删除 SOGA 配置目录: /etc/soga"
+        rm -rf "/etc/soga"
+    else
+        log "SOGA 配置目录不存在: /etc/soga"
+    fi
+
     systemctl daemon-reload
-    log "SOGA 管理服务及备份已卸载。"
+    log "SOGA 管理服务、备份及配置已卸载。"
     
-    # 模拟 Ctrl+C 退出（发送 SIGINT 信号）
+    # 模拟 Ctrl+C 退出菜单（发送 SIGINT 信号）
     kill -SIGINT $$
 }
 
