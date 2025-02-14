@@ -91,7 +91,7 @@ get_running_services() {
 backup_files() {
     log "开始备份文件..."
     
-    # 1. 先删除旧备份目录（可选：如果想完全清空备份，可以用 rm -rf ）
+    # 1. 删除旧备份目录（如果需要完全清空备份）
     rm -rf "$BACKUP_DIR"
     mkdir -p "$BACKUP_DIR"
     
@@ -106,7 +106,6 @@ backup_files() {
         fi
     done
 }
-
 
 restore_files() {
     log "开始恢复文件..."
@@ -165,9 +164,13 @@ restore_files() {
 }
 
 show_status() {
-    log "当前服务状态:"
-    systemctl list-units --type=service --all | grep "soga_"
-    log "当前文件列表:"
+    log "详细的 SOGA 服务状态："
+    for svc in $(systemctl list-units --type=service --all | grep "soga_" | awk '{print $1}'); do
+        log "状态：$svc"
+        systemctl status "$svc" --no-pager
+        echo "----------------------------------------------------"
+    done
+    log "当前 SOGA 文件列表："
     ls -l "$SOGA_DIR"/soga_* 2>/dev/null || true
 }
 
@@ -240,7 +243,7 @@ check_files() {
 }
 
 main() {
-    log "开始检查SOGA服务..."
+    log "开始检查 SOGA 服务..."
     local status=0
     check_files || status=1
     check_services || status=1
@@ -360,7 +363,7 @@ show_menu() {
     echo -e "${GREEN}2.${NC} 配置/修改自动重启时间"
     echo -e "${GREEN}3.${NC} 立即备份"
     echo -e "${GREEN}4.${NC} 立即恢复"
-    echo -e "${GREEN}5.${NC} 查看状态"
+    echo -e "${GREEN}5.${NC} 查看详细状态 (包含各 soga 服务的状态)"
     echo -e "${GREEN}6.${NC} 立即重启"
     echo -e "${GREEN}0.${NC} 退出"
     echo -e "${MAGENTA}=================================================${NC}"
@@ -416,7 +419,7 @@ main() {
             log "恢复完成"
             ;;
         5)
-            log "查看服务状态..."
+            log "查看详细服务状态..."
             "$RECOVERY_SCRIPT" status
             systemctl status soga-autoreboot.timer --no-pager
             ;;
