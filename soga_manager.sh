@@ -378,39 +378,47 @@ main() {
             setup_auto_reboot
             log "安装/更新完成"
             ;;
-            2)
-                read -p "请输入每日自动重启时间 (格式 HH:MM，默认 ${REBOOT_TIME}): " new_time
-                if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
-                    REBOOT_TIME="$new_time"
-                    create_systemd_services
-                    setup_auto_reboot
-                else
-                    log "错误: 时间格式不正确"
-                fi
-                ;;
-            3)
-                "${RECOVERY_SCRIPT}" backup
-                ;;
-            4)
-                "${RECOVERY_SCRIPT}" restore
-                ;;
-            5)
-                "${RECOVERY_SCRIPT}" status
-                systemctl status soga-autoreboot.timer --no-pager
-                ;;
-            6)
-                reboot_now
-                ;;
-            0)
-                log "退出程序"
-                exit 0
-                ;;
-            *)
-                log "无效选择"
-                ;;
-        esac
-        pause
-    done
+        2)
+            read -p "请输入每日自动重启时间 (格式 HH:MM，默认 ${REBOOT_TIME}): " new_time
+            if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+                REBOOT_TIME="$new_time"
+                create_systemd_services
+                setup_auto_reboot
+                log "自动重启时间已修改为 $REBOOT_TIME"
+            else
+                log "错误: 时间格式不正确"
+            fi
+            ;;
+        3)
+            log "开始备份数据..."
+            "$RECOVERY_SCRIPT" backup
+            log "备份完成"
+            ;;
+        4)
+            log "开始恢复数据..."
+            "$RECOVERY_SCRIPT" restore
+            log "恢复完成"
+            ;;
+        5)
+            log "查看服务状态..."
+            "$RECOVERY_SCRIPT" status
+            systemctl status soga-autoreboot.timer --no-pager
+            ;;
+        6)
+            log "立即重启系统..."
+            reboot_now
+            ;;
+        0)
+            log "退出程序"
+            exit 0
+            ;;
+        *)
+            log "无效选择"
+            ;;
+    esac
+    exit 0
 }
 
 main
+
+
