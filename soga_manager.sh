@@ -383,7 +383,7 @@ reboot_now() {
 # 6. 卸载 SOGA 管理服务
 ##############################################################################
 uninstall_soga_manager() {
-    read -p "确定要卸载 SOGA 管理服务吗？这将移除所有管理文件。请输入 yes 确认: " confirm
+    read -p "确定要卸载 SOGA 管理服务吗？这将移除所有管理文件及备份数据。请输入 yes 确认: " confirm
     if [[ "$confirm" != "yes" ]]; then
         log "取消卸载操作。"
         pause
@@ -391,6 +391,8 @@ uninstall_soga_manager() {
     fi
 
     log "正在卸载 SOGA 管理服务..."
+
+    # 停止并禁用 systemd 服务
     systemctl stop soga-recovery.service 2>/dev/null || true
     systemctl disable soga-recovery.service 2>/dev/null || true
     systemctl stop soga-autoreboot.timer 2>/dev/null || true
@@ -398,6 +400,7 @@ uninstall_soga_manager() {
     systemctl stop soga-autoreboot.service 2>/dev/null || true
     systemctl disable soga-autoreboot.service 2>/dev/null || true
 
+    # 删除管理文件
     for file in "$RECOVERY_SCRIPT" "$CHECK_SCRIPT" "$RECOVERY_SERVICE" "$REBOOT_SERVICE" "$REBOOT_TIMER"; do
         if [ -f "$file" ]; then
             log "正在删除文件: $file"
@@ -407,9 +410,17 @@ uninstall_soga_manager() {
         fi
     done
 
+    # 删除备份目录（如果存在）
+    if [ -d "$BACKUP_DIR" ]; then
+        log "正在删除备份目录: $BACKUP_DIR"
+        rm -rf "$BACKUP_DIR"
+    else
+        log "备份目录不存在: $BACKUP_DIR"
+    fi
+
     systemctl daemon-reload
-    log "SOGA 管理服务已卸载。"
-    pause
+    log "SOGA 管理服务及备份已卸载。"
+    exit 0
 }
 
 ##############################################################################
