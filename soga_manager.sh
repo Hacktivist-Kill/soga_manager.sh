@@ -363,14 +363,21 @@ show_menu() {
     fi
 }
 
-            1)
-                log "开始安装/更新恢复服务..."
-                create_recovery_script
-                create_check_script
-                create_systemd_services
-                setup_auto_reboot
-                log "安装/更新完成"
-                ;;
+##############################################################################
+# 7. 主要逻辑
+##############################################################################
+main() {
+    clear
+    show_menu
+    case "$choice" in
+        1)
+            log "开始安装/更新恢复服务..."
+            create_recovery_script
+            create_check_script
+            create_systemd_services
+            setup_auto_reboot
+            log "安装/更新完成"
+            ;;
             2)
                 read -p "请输入每日自动重启时间 (格式 HH:MM，默认 ${REBOOT_TIME}): " new_time
                 if [[ $new_time =~ ^([0-1][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
