@@ -346,6 +346,16 @@ show_menu() {
     echo -e "${MAGENTA}=================================================${NC}"
     echo -e "${CYAN}           SOGA 服务管理工具 (美化版)${NC}"
     echo -e "${MAGENTA}=================================================${NC}"
+
+    # **检测 SOGA 是否安装**
+    if systemctl list-units --type=service --all | grep -q "soga_"; then
+        echo -e "${GREEN}✅ 已检测到 SOGA 运行中${NC}"
+        installed=true
+    else
+        echo -e "${YELLOW}⚠️  未检测到 SOGA 运行，将自动执行 1${NC}"
+        installed=false
+    fi
+
     echo -e "${GREEN}1.${NC} 安装/更新恢复服务 (含原子替换, 防止文本忙)"
     echo -e "${GREEN}2.${NC} 配置/修改自动重启时间"
     echo -e "${GREEN}3.${NC} 立即备份"
@@ -355,12 +365,17 @@ show_menu() {
     echo -e "${GREEN}0.${NC} 退出"
     echo -e "${MAGENTA}=================================================${NC}"
 
-    # **判断是否是交互式终端**
-    if [ -t 0 ]; then
+    # **如果是交互模式，等待用户输入**
+    if [[ -t 0 ]]; then
         read -p "请选择操作 [0-6]: " choice
     else
-        echo -e "${YELLOW}检测到非交互模式，自动执行 1 (安装/更新恢复服务)${NC}"
-        choice=1
+        if [ "$installed" = false ]; then
+            echo -e "${YELLOW}⚠️  SOGA 未安装，自动执行 1 (安装/更新恢复服务)${NC}"
+            choice=1
+        else
+            echo -e "${GREEN}✅ SOGA 已安装，不执行任何操作${NC}"
+            exit 0
+        fi
     fi
 }
 
